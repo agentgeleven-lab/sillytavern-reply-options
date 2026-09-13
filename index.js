@@ -32,8 +32,8 @@ export function mount() {
     field('style','回复形式','select',[['mixed','对白与动作'],['dialogue','仅对白'],['action','动作描写为主']]);
     field('mode','普通生成填入方式','select',[['append','保留原草稿，切换候选'],['replace','替换原草稿，支持撤销']]);
     field('persona','参考用户人设','checkbox');field('character','参考角色设定（含绑定世界书）','checkbox');field('world','参考激活的全体世界书','checkbox');
-    field('directions','选项方向（每行一个）','textarea');field('prompt','自定义生成要求','textarea');
-    settingsBox.append(node('p','草稿扩写会用候选替换原草稿，可撤销。角色设定包含绑定世界书；全体世界书包含当前全局启用及角色、聊天、人设绑定的书。读取全部未禁用的非空条目，不要求关键词触发。'));
+    field('directions','选项方向（每行一个，按数量随机抽取）','textarea');field('prompt','自定义生成要求','textarea');
+    settingsBox.append(node('p','方向少于选项数量时允许重复抽取；方向足够时不重复抽取。重复方向仍生成不同回复。草稿扩写会用候选替换原草稿，可撤销。角色设定包含绑定世界书；全体世界书包含当前全局启用及角色、聊天、人设绑定的书。读取全部未禁用的非空条目，不要求关键词触发。'));
     const settingsButton=button('设置',()=>{settingsBox.hidden=!settingsBox.hidden;settingsButton.setAttribute('aria-expanded',String(!settingsBox.hidden));});
     settingsButton.setAttribute('aria-controls','reply-options-settings');
     settingsButton.setAttribute('aria-expanded','false');
