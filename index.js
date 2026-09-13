@@ -35,9 +35,7 @@ export function mount() {
     field('directions','选项方向（每行一个）','textarea');field('prompt','自定义生成要求','textarea');
     settingsBox.append(node('p','草稿扩写会用候选替换原草稿，可撤销。角色设定包含绑定世界书；全体世界书包含当前全局启用及角色、聊天、人设绑定的书。读取全部未禁用的非空条目，不要求关键词触发。'));
     button('设置',()=>{settingsBox.open=!settingsBox.open;if(settingsBox.open)settingsBox.scrollIntoView({block:'nearest'});});
-    const settingsHost=document.querySelector('#extensions_settings2')||document.querySelector('#extensions_settings');
-    if(settingsHost)settingsHost.append(settingsBox);else panel.append(settingsBox);
-    panel.append(controls,status,cards);form.before(panel);
+    panel.append(controls,settingsBox,status,cards);form.before(panel);
     panel.addEventListener('toggle',()=>{settings.expanded=panel.open;save();});
     function updateSelection(){undo.disabled=draft.base===null;for(const b of cards.children)b.setAttribute('aria-pressed','false');}
     updateSelection();
