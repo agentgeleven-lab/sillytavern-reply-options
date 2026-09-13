@@ -16,7 +16,7 @@ export function mount() {
     const cancel=button('停止等待',()=>controller?.abort());cancel.hidden=true;
     const undo=button('撤销填入',()=>{try{draft.undo(inputElement());status.textContent='已还原原草稿。';updateSelection();}catch(e){status.textContent=e.message;}});
     button('保留编辑',()=>{draft.reset();updateSelection();status.textContent='已保留输入框现有内容；下次选择将以它为原草稿。';});
-    const settingsBox=node('details');settingsBox.id='reply-options-settings';settingsBox.className='ro-settings';settingsBox.append(node('summary','回复选项设置'));
+    const settingsBox=node('div');settingsBox.id='reply-options-settings';settingsBox.className='ro-settings';settingsBox.hidden=true;
     function save(){const c=context();if(c?.extensionSettings){c.extensionSettings[KEY]={...settings};c.saveSettingsDebounced?.();}}
     function invalidate(message='上下文已更新，请重新生成。',reset=false){revision++;controller?.abort();cards.replaceChildren();if(reset)draft.reset();updateSelection();status.textContent=message;}
     function field(key,label,type,options){
@@ -34,7 +34,9 @@ export function mount() {
     field('persona','参考用户人设','checkbox');field('character','参考角色设定（含绑定世界书）','checkbox');field('world','参考激活的全体世界书','checkbox');
     field('directions','选项方向（每行一个）','textarea');field('prompt','自定义生成要求','textarea');
     settingsBox.append(node('p','草稿扩写会用候选替换原草稿，可撤销。角色设定包含绑定世界书；全体世界书包含当前全局启用及角色、聊天、人设绑定的书。读取全部未禁用的非空条目，不要求关键词触发。'));
-    button('设置',()=>{settingsBox.open=!settingsBox.open;if(settingsBox.open)settingsBox.scrollIntoView({block:'nearest'});});
+    const settingsButton=button('设置',()=>{settingsBox.hidden=!settingsBox.hidden;settingsButton.setAttribute('aria-expanded',String(!settingsBox.hidden));});
+    settingsButton.setAttribute('aria-controls','reply-options-settings');
+    settingsButton.setAttribute('aria-expanded','false');
     panel.append(controls,settingsBox,status,cards);form.before(panel);
     panel.addEventListener('toggle',()=>{settings.expanded=panel.open;save();});
     function updateSelection(){undo.disabled=draft.base===null;for(const b of cards.children)b.setAttribute('aria-pressed','false');}

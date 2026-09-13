@@ -17,4 +17,4 @@
 #reply-options-settings input[type=number] { width:75px; }
 #reply-options-settings p { font-size:12px; opacity:.8; }
 
-#reply-options-panel #reply-options-settings[open] { max-height:40vh; overflow-y:auto; margin-top:6px; border-top:1px solid var(--SmartThemeBorderColor,#555); }
+#reply-options-panel #reply-options-settings:not([hidden]) { max-height:40vh; overflow-y:auto; margin-top:6px; border-top:1px solid var(--SmartThemeBorderColor,#555); }
