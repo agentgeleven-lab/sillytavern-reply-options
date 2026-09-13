@@ -1,104 +1,76 @@
-import { DEFAULTS, normalizeSettings, chatStamp, generateOptions, fillInput } from './generator.js';
-
-const KEY = 'reply_options_mvp';
-const context = () => globalThis.SillyTavern?.getContext?.();
-
-function mount() {
-    if (document.getElementById('reply-options-panel')) return;
-    const ctx = context();
-    const form = document.querySelector('#send_form');
-    if (!ctx || !form) return;
-    let settings = normalizeSettings(ctx.extensionSettings?.[KEY] ?? DEFAULTS);
-    let busy = false;
-    let revision = 0;
-    const panel = document.createElement('details');
-    panel.id = 'reply-options-panel';
-    panel.open = true;
-    panel.innerHTML = `<summary>回复选项</summary>
-        <div class="ro-controls">
-            <button type="button" class="menu_button ro-generate">生成选项</button>
-            <label>数量 <select class="ro-count" aria-label="选项数量">${[2,3,4,5,6].map(n => `<option>${n}</option>`).join('')}</select></label>
-            <label>最近 <input class="ro-depth" aria-label="最近聊天条数" type="number" min="1" max="40"> 条</label>
-            <label>填入方式 <select class="ro-mode" aria-label="填入方式"><option value="append">追加（保留草稿）</option><option value="replace">替换输入框</option></select></label>
-        </div>
-        <div class="ro-status" role="status" aria-live="polite">点击生成，选择后填入输入框，由你发送。</div>
-        <div class="ro-options"></div>`;
-    form.before(panel);
-    const find = selector => panel.querySelector(selector);
-    const generate = find('.ro-generate');
-    const status = find('.ro-status');
-    const cards = find('.ro-options');
-    const count = find('.ro-count');
-    const depth = find('.ro-depth');
-    const mode = find('.ro-mode');
-    count.value = settings.count;
-    depth.value = settings.depth;
-    mode.value = settings.mode;
-
-    function clear(message = '聊天已更新，请重新生成选项。') {
-        revision++;
-        cards.replaceChildren();
-        status.textContent = message;
+import { normalizeSettings, chatStamp, collectContext, generateOptions, inputElement, DraftSelection, waitForResult } from './generator.js';
+const KEY='reply_options_mvp';
+const context=()=>globalThis.SillyTavern?.getContext?.();
+const node=(tag,text,cls)=>{const n=document.createElement(tag); if(text)n.textContent=text;if(cls)n.className=cls;return n;};
+export function mount() {
+    if(document.getElementById('reply-options-panel'))return;
+    const ctx=context(), form=document.querySelector('#send_form');if(!ctx||!form)return;
+    let settings=normalizeSettings(ctx.extensionSettings?.[KEY]), revision=0, controller=null, world=[], worldKey=null;
+    const draft=new DraftSelection();
+    const panel=node('details');panel.id='reply-options-panel';panel.open=settings.expanded;
+    panel.append(node('summary','回复选项'));
+    const controls=node('div',null,'ro-controls'), cards=node('div',null,'ro-options'), status=node('div','点击生成，选择后填入，由你发送。','ro-status');
+    status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+    const button=(label,fn,parent=controls)=>{const b=node('button',label,'menu_button');b.type='button';b.addEventListener('click',fn);parent.append(b);return b;};
+    const generate=button('生成选项',()=>run(false)), expand=button('根据草稿扩写',()=>run(true));
+    const cancel=button('停止等待',()=>controller?.abort());cancel.hidden=true;
+    const undo=button('撤销填入',()=>{try{draft.undo(inputElement());status.textContent='已还原原草稿。';updateSelection();}catch(e){status.textContent=e.message;}});
+    button('保留编辑',()=>{draft.reset();updateSelection();status.textContent='已保留输入框现有内容；下次选择将以它为原草稿。';});
+    const settingsBox=node('details');settingsBox.id='reply-options-settings';settingsBox.className='ro-settings';settingsBox.append(node('summary','回复选项设置'));
+    function save(){const c=context();if(c?.extensionSettings){c.extensionSettings[KEY]={...settings};c.saveSettingsDebounced?.();}}
+    function invalidate(message='上下文已更新，请重新生成。',reset=false){revision++;controller?.abort();cards.replaceChildren();if(reset)draft.reset();updateSelection();status.textContent=message;}
+    function field(key,label,type,options){
+        const row=node('label'), title=node('span',label);row.append(title);
+        const el=node(type==='textarea'?'textarea':options?'select':'input');el.setAttribute('aria-label',label);
+        if(options)for(const [value,text] of options){const o=node('option',text);o.value=value;el.append(o);}
+        if(type==='checkbox'){el.type='checkbox';el.checked=settings[key];}else {if(type==='number'){el.type='number';el.min=key==='count'?2:key==='timeout'?15:1;el.max=key==='count'?6:key==='timeout'?300:40;}el.value=settings[key];}
+        if(type==='textarea')el.maxLength=key==='prompt'?4000:600;
+        el.addEventListener('change',()=>{settings=normalizeSettings({...settings,[key]:type==='checkbox'?el.checked:el.value});if(type!=='checkbox')el.value=settings[key];save();invalidate('设置已保存，请重新生成。');});row.append(el);settingsBox.append(row);
     }
-    for (const control of [count, depth, mode]) control.addEventListener('change', () => {
-        settings = normalizeSettings({ count: count.value, depth: depth.value, mode: mode.value });
-        depth.value = settings.depth;
-        const current = context();
-        if (current?.extensionSettings) {
-            current.extensionSettings[KEY] = { ...settings };
-            current.saveSettingsDebounced?.();
-        }
-        if (control !== mode) clear('设置已更新，请重新生成选项。');
-    });
-
-    generate.addEventListener('click', async () => {
-        if (busy) return;
-        busy = true;
-        generate.disabled = true;
-        generate.textContent = '生成中…';
-        clear('正在使用当前模型生成回复选项…');
-        const ticket = revision;
-        const start = context();
-        const stamp = chatStamp(start);
-        try {
-            const options = await generateOptions(start, settings);
-            if (ticket !== revision || stamp !== chatStamp(context())) {
-                status.textContent = '聊天或设置已变化，本次结果已丢弃，请重新生成。';
-                return;
-            }
-            for (const [index, text] of options.entries()) {
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'ro-card';
-                button.textContent = text;
-                button.setAttribute('aria-label', `选项 ${index + 1}：${text}`);
-                button.addEventListener('click', () => {
-                    if (ticket !== revision || stamp !== chatStamp(context())) return clear();
-                    try {
-                        fillInput(text, settings.mode);
-                        status.textContent = '已填入输入框，可继续编辑；尚未发送。';
-                    } catch (error) { status.textContent = error.message; }
-                });
-                cards.append(button);
-            }
-            status.textContent = `已生成 ${options.length} 个选项，点击即可填入。`;
-        } catch (error) {
-            if (ticket === revision) status.textContent = `生成失败：${error.message || '请检查模型连接后重试。'}`;
-        } finally {
-            busy = false;
-            generate.disabled = false;
-            generate.textContent = '重新生成';
-        }
-    });
-    for (const name of ['CHAT_CHANGED', 'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'MESSAGE_EDITED', 'MESSAGE_UPDATED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'PERSONA_CHANGED']) {
-        if (ctx.event_types?.[name]) ctx.eventSource?.on(ctx.event_types[name], () => clear());
+    field('count','选项数量','number');field('depth','最近聊天条数','number');field('timeout','等待上限（秒）','number');
+    field('length','回复长度','select',[['short','短：约 1 句'],['medium','中：1–3 句'],['long','长：3–6 句']]);
+    field('style','回复形式','select',[['mixed','对白与动作'],['dialogue','仅对白'],['action','动作描写为主']]);
+    field('mode','普通生成填入方式','select',[['append','保留原草稿，切换候选'],['replace','替换原草稿，支持撤销']]);
+    field('persona','参考用户人设','checkbox');field('character','参考角色设定','checkbox');field('world','参考最近实际激活的世界书','checkbox');
+    field('directions','选项方向（每行一个）','textarea');field('prompt','自定义生成要求','textarea');
+    settingsBox.append(node('p','草稿扩写会用候选替换原草稿，可撤销。世界书仅使用本页最近一次生成激活的条目；刚刷新或切换聊天后需先正常聊天一次。'));
+    button('设置',()=>{settingsBox.open=!settingsBox.open;if(settingsBox.open)settingsBox.scrollIntoView({block:'nearest'});});
+    const settingsHost=document.querySelector('#extensions_settings2')||document.querySelector('#extensions_settings');
+    if(settingsHost)settingsHost.append(settingsBox);else panel.append(settingsBox);
+    panel.append(controls,status,cards);form.before(panel);
+    panel.addEventListener('toggle',()=>{settings.expanded=panel.open;save();});
+    function updateSelection(){undo.disabled=draft.base===null;for(const b of cards.children)b.setAttribute('aria-pressed','false');}
+    updateSelection();
+    function setBusy(value){generate.disabled=value;expand.disabled=value;cancel.hidden=!value;generate.textContent=value?'生成中…':'生成 / 换一批';}
+    async function run(fromDraft){
+        if(controller)return;
+        let initial, stamp, config, ticket, original;
+        try{initial=context();stamp=chatStamp(initial);config={...settings};original=inputElement().value;if(fromDraft&&!original.trim())throw new Error('先在输入框写下草稿或回复意图。');}catch(e){status.textContent=e.message;return;}
+        if(fromDraft)draft.reset();updateSelection();cards.replaceChildren();ticket=++revision;const current=new AbortController();controller=current;setBusy(true);
+        const activeWorld=worldKey===identity(initial)?world:[];
+        const info=collectContext(initial,config,activeWorld);
+        const sources=`人设：${info.persona?'已读取':'未使用/为空'}；角色：${info.characters.length}；世界书：${info.world.length} 条`;
+        status.textContent=`生成中… ${sources}`;
+        try{
+            const options=await waitForResult(generateOptions(initial,config,{draft:fromDraft?original:'',world:activeWorld}),config.timeout*1000,current.signal);
+            if(ticket!==revision||stamp!==chatStamp(context()))throw new Error('聊天已变化，本次结果已丢弃。');
+            for(const option of options){const card=node('button',null,'ro-card');card.type='button';card.setAttribute('aria-pressed','false');card.append(node('strong',option.label),node('span',option.text));card.addEventListener('click',()=>{
+                if(ticket!==revision||stamp!==chatStamp(context()))return invalidate();
+                try{const input=inputElement();if(fromDraft&&draft.base===null&&input.value!==original)throw new Error('扩写期间草稿已改变，请重新扩写或使用普通生成。');draft.choose(input,option.text,fromDraft?'replace':config.mode);updateSelection();card.setAttribute('aria-pressed','true');status.textContent='已填入，尚未发送。可切换候选或撤销。';}catch(e){status.textContent=e.message;}
+            });cards.append(card);}
+            status.textContent=`${options.length} 个选项 · ${sources}`;
+        }catch(e){if(ticket===revision)status.textContent=e.message||'生成失败，请检查模型连接。';}
+        finally{if(controller===current){controller=null;setBusy(false);}}
     }
+    function identity(c={}){return JSON.stringify([c.getCurrentChatId?.()??c.chatId,c.characterId,c.groupId]);}
+    const events=ctx.eventTypes||ctx.event_types||{};
+    const on=(name,fn)=>{if(events[name])ctx.eventSource?.on(events[name],fn);};
+    on('WORLD_INFO_ACTIVATED',entries=>{world=Array.isArray(entries)?entries.map(e=>({comment:e.comment,content:e.content})):[];worldKey=identity(context());});
+    for(const event of ['CHAT_CHANGED','MESSAGE_SENT','MESSAGE_RECEIVED','MESSAGE_EDITED','MESSAGE_UPDATED','MESSAGE_DELETED','MESSAGE_SWIPED','PERSONA_CHANGED','CHARACTER_EDITED','WORLDINFO_UPDATED','WORLDINFO_SETTINGS_UPDATED'])on(event,()=>{
+        if(['CHAT_CHANGED','MESSAGE_SENT','MESSAGE_EDITED','MESSAGE_UPDATED','MESSAGE_DELETED','MESSAGE_SWIPED','PERSONA_CHANGED','CHARACTER_EDITED','WORLDINFO_UPDATED','WORLDINFO_SETTINGS_UPDATED'].includes(event)){world=[];worldKey=null;}
+        invalidate(undefined,['CHAT_CHANGED','MESSAGE_SENT'].includes(event));
+    });
 }
+function start(){const c=context(),ev=c?.eventTypes||c?.event_types;if(ev?.APP_READY)c.eventSource?.on(ev.APP_READY,mount);mount();}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
 
-function start() {
-    const ctx = context();
-    if (ctx?.event_types?.APP_READY) ctx.eventSource?.on(ctx.event_types.APP_READY, mount);
-    mount();
-}
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
-else start();
