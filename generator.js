@@ -1,3 +1,4 @@
+import { readWorldContext, hostWorldSettings } from './world-context.js';
 export const DEFAULTS = Object.freeze({ count: 3, depth: 12, mode: 'append', length: 'medium', style: 'mixed', prompt: '', directions: '推进剧情\n追问细节\n委婉拒绝\n自由发挥', persona: true, character: true, world: false, timeout: 90, expanded: false });
 const cut = (v, n) => typeof v === 'string' ? v.slice(0, n) : '';
 export function normalizeSettings(v = {}) {
@@ -20,7 +21,7 @@ export function collectContext(ctx, settings, world = []) {
     const group = (ctx.groups ?? []).find(g => String(g.id) === String(ctx.groupId));
     const members = group ? (ctx.characters ?? []).filter(c => group.members?.includes(c.avatar)).slice(0,8) : [ctx.characters?.[ctx.characterId]].filter(Boolean);
     const characters = s.character ? members.map(c => ({ name: cut(c.name,100), description: cut(c.data?.description ?? c.description,3000), personality: cut(c.data?.personality ?? c.personality,1500), scenario: cut(c.data?.scenario ?? c.scenario,1500) })) : [];
-    return { userName: cut(ctx.name1 || '用户',100), persona: s.persona ? cut(ctx.powerUserSettings?.persona_description,4000) : '', characters, history, world: s.world ? world.slice(0,40).map(e => ({ title: cut(e.comment,100), content: cut(e.content,1500) })).reduce((a,e) => { const used = a.reduce((n,x) => n+x.content.length,0); if(used < 10000) a.push({...e,content:e.content.slice(0,10000-used)}); return a; },[]) : [] };
+    return { userName: cut(ctx.name1 || '用户',100), persona: s.persona ? cut(ctx.powerUserSettings?.persona_description,4000) : '', characters, history, world: world.filter(e => s.world || (s.character && e.sources?.includes('character'))).map(e => ({ book: e.book, title: e.title ?? e.comment ?? '', content: e.content })) };
 }
 export function parseOptions(raw, count = 3) {
     if (typeof raw !== 'string' || raw.length > 60000) throw new Error('模型返回为空或过长。');
@@ -52,9 +53,13 @@ export function parseOptions(raw, count = 3) {
     }
     throw new Error('有效选项不足 2 条或格式不正确，请重新生成。');
 }
-export async function generateOptions(ctx, settings, { draft = '', world = [] } = {}) {
+export async function generateOptions(ctx, settings, { draft = '', world, onContext, isCurrent = () => true } = {}) {
     if(typeof ctx?.generateRaw!=='function') throw new Error('当前前端缺少 generateRaw 接口。');
-    const s=normalizeSettings(settings), data=collectContext(ctx,s,world);
+    const s=normalizeSettings(settings);
+    const lore=world ? {entries:world,books:[]} : await readWorldContext(ctx,s,()=>hostWorldSettings(ctx));
+    if(!isCurrent()) throw new Error('聊天或设置已变化，已取消本次生成。');
+    const data=collectContext(ctx,s,lore.entries);
+    onContext?.(data,lore);
     if(!data.history.length) throw new Error('请先打开已有内容的聊天。');
     const lengths={short:'每项约 1 句',medium:'每项 1 至 3 句',long:'每项 3 至 6 句'};
     const styles={dialogue:'仅对白，不写动作或旁白',mixed:'按情境混合对白与动作',action:'以用户的动作和反应为主，可包含少量对白'};

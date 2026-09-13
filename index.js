@@ -5,7 +5,7 @@ const node=(tag,text,cls)=>{const n=document.createElement(tag); if(text)n.textC
 export function mount() {
     if(document.getElementById('reply-options-panel'))return;
     const ctx=context(), form=document.querySelector('#send_form');if(!ctx||!form)return;
-    let settings=normalizeSettings(ctx.extensionSettings?.[KEY]), revision=0, controller=null, world=[], worldKey=null;
+    let settings=normalizeSettings(ctx.extensionSettings?.[KEY]), revision=0, controller=null;
     const draft=new DraftSelection();
     const panel=node('details');panel.id='reply-options-panel';panel.open=settings.expanded;
     panel.append(node('summary','回复选项'));
@@ -31,9 +31,9 @@ export function mount() {
     field('length','回复长度','select',[['short','短：约 1 句'],['medium','中：1–3 句'],['long','长：3–6 句']]);
     field('style','回复形式','select',[['mixed','对白与动作'],['dialogue','仅对白'],['action','动作描写为主']]);
     field('mode','普通生成填入方式','select',[['append','保留原草稿，切换候选'],['replace','替换原草稿，支持撤销']]);
-    field('persona','参考用户人设','checkbox');field('character','参考角色设定','checkbox');field('world','参考最近实际激活的世界书','checkbox');
+    field('persona','参考用户人设','checkbox');field('character','参考角色设定（含绑定世界书）','checkbox');field('world','参考激活的全体世界书','checkbox');
     field('directions','选项方向（每行一个）','textarea');field('prompt','自定义生成要求','textarea');
-    settingsBox.append(node('p','草稿扩写会用候选替换原草稿，可撤销。世界书仅使用本页最近一次生成激活的条目；刚刷新或切换聊天后需先正常聊天一次。'));
+    settingsBox.append(node('p','草稿扩写会用候选替换原草稿，可撤销。角色设定包含绑定世界书；全体世界书包含当前全局启用及角色、聊天、人设绑定的书。读取全部未禁用的非空条目，不要求关键词触发。'));
     button('设置',()=>{settingsBox.open=!settingsBox.open;if(settingsBox.open)settingsBox.scrollIntoView({block:'nearest'});});
     const settingsHost=document.querySelector('#extensions_settings2')||document.querySelector('#extensions_settings');
     if(settingsHost)settingsHost.append(settingsBox);else panel.append(settingsBox);
@@ -47,12 +47,10 @@ export function mount() {
         let initial, stamp, config, ticket, original;
         try{initial=context();stamp=chatStamp(initial);config={...settings};original=inputElement().value;if(fromDraft&&!original.trim())throw new Error('先在输入框写下草稿或回复意图。');}catch(e){status.textContent=e.message;return;}
         if(fromDraft)draft.reset();updateSelection();cards.replaceChildren();ticket=++revision;const current=new AbortController();controller=current;setBusy(true);
-        const activeWorld=worldKey===identity(initial)?world:[];
-        const info=collectContext(initial,config,activeWorld);
-        const sources=`人设：${info.persona?'已读取':'未使用/为空'}；角色：${info.characters.length}；世界书：${info.world.length} 条`;
-        status.textContent=`生成中… ${sources}`;
+        let sources='正在读取世界书…';
+        status.textContent=sources;
         try{
-            const options=await waitForResult(generateOptions(initial,config,{draft:fromDraft?original:'',world:activeWorld}),config.timeout*1000,current.signal);
+            const options=await waitForResult(generateOptions(initial,config,{draft:fromDraft?original:'',isCurrent:()=>!current.signal.aborted && ticket===revision && stamp===chatStamp(context()),onContext:(info,lore)=>{sources=`人设：${info.persona?'已读取':'未使用/为空'}；角色：${info.characters.length}；世界书：${lore.books.length} 本 / ${info.world.length} 条`;status.textContent=`生成中… ${sources}`;}}),config.timeout*1000,current.signal);
             if(ticket!==revision||stamp!==chatStamp(context()))throw new Error('聊天已变化，本次结果已丢弃。');
             for(const option of options){const card=node('button',null,'ro-card');card.type='button';card.setAttribute('aria-pressed','false');card.append(node('strong',option.label),node('span',option.text));card.addEventListener('click',()=>{
                 if(ticket!==revision||stamp!==chatStamp(context()))return invalidate();
@@ -62,12 +60,9 @@ export function mount() {
         }catch(e){if(ticket===revision)status.textContent=e.message||'生成失败，请检查模型连接。';}
         finally{if(controller===current){controller=null;setBusy(false);}}
     }
-    function identity(c={}){return JSON.stringify([c.getCurrentChatId?.()??c.chatId,c.characterId,c.groupId]);}
     const events=ctx.eventTypes||ctx.event_types||{};
     const on=(name,fn)=>{if(events[name])ctx.eventSource?.on(events[name],fn);};
-    on('WORLD_INFO_ACTIVATED',entries=>{world=Array.isArray(entries)?entries.map(e=>({comment:e.comment,content:e.content})):[];worldKey=identity(context());});
     for(const event of ['CHAT_CHANGED','MESSAGE_SENT','MESSAGE_RECEIVED','MESSAGE_EDITED','MESSAGE_UPDATED','MESSAGE_DELETED','MESSAGE_SWIPED','PERSONA_CHANGED','CHARACTER_EDITED','WORLDINFO_UPDATED','WORLDINFO_SETTINGS_UPDATED'])on(event,()=>{
-        if(['CHAT_CHANGED','MESSAGE_SENT','MESSAGE_EDITED','MESSAGE_UPDATED','MESSAGE_DELETED','MESSAGE_SWIPED','PERSONA_CHANGED','CHARACTER_EDITED','WORLDINFO_UPDATED','WORLDINFO_SETTINGS_UPDATED'].includes(event)){world=[];worldKey=null;}
         invalidate(undefined,['CHAT_CHANGED','MESSAGE_SENT'].includes(event));
     });
 }
